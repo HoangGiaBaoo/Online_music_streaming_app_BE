@@ -49,9 +49,29 @@ public class AuthService {
         );
 
         UserDetails userDetails = userDetailsService.loadUserByUsername(request.getUsername());
-        String token = jwtUtil.generateToken(userDetails.getUsername());
+        User user = userRepository.findByUsername(userDetails.getUsername()).orElseThrow();
+        return buildResponse(user);
+    }
 
-        User user = userRepository.findByUsername(request.getUsername()).orElseThrow();
-        return new JwtResponse(token, user.getUsername(), user.getRole());
+    public JwtResponse refresh(String refreshToken) {
+        if (refreshToken == null || refreshToken.isBlank() || !jwtUtil.isRefreshTokenValid(refreshToken)) {
+            throw new RuntimeException("Invalid refresh token");
+        }
+        String username = jwtUtil.extractUsername(refreshToken);
+        User user = userRepository.findByUsername(username)
+                .orElseThrow(() -> new RuntimeException("User not found"));
+        return buildResponse(user);
+    }
+
+    private JwtResponse buildResponse(User user) {
+        String accessToken = jwtUtil.generateToken(user.getUsername());
+        String newRefreshToken = jwtUtil.generateRefreshToken(user.getUsername());
+        return new JwtResponse(
+                accessToken,
+                newRefreshToken,
+                jwtUtil.getAccessExpirationSeconds(),
+                user.getUsername(),
+                user.getRole()
+        );
     }
 }

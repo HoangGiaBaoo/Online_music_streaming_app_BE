@@ -92,6 +92,7 @@ public class HomeFeedService {
         if (musicOnly) {
             sections.removeIf(s -> "FEATURED".equals(s.getKind()));
         }
+        sections.removeIf(s -> s.getItems() == null || s.getItems().isEmpty());
         return sections;
     }
 

@@ -28,4 +28,5 @@ file:
 
 jwt:
   secret: dev-secret-key-music-app-huce-2025-change-in-prod
-  expiration: 86400000
+  expiration: 604800000        # 7 days (access token)
+  refresh-expiration: 2592000000  # 30 days (refresh token)
