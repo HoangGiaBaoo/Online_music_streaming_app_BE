@@ -39,4 +39,11 @@ public class TrackService {
         track.setPlayCount(track.getPlayCount() + 1);
         trackRepository.save(track);
     }
+
+    public void deleteById(Long id) {
+        if (!trackRepository.existsById(id)) {
+            throw new RuntimeException("Track not found: " + id);
+        }
+        trackRepository.deleteById(id);
+    }
 }

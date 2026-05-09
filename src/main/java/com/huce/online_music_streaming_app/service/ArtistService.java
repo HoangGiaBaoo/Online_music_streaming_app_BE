@@ -29,4 +29,11 @@ public class ArtistService {
     public Artist save(Artist artist) {
         return artistRepository.save(artist);
     }
+
+    public void deleteById(Long id) {
+        if (!artistRepository.existsById(id)) {
+            throw new RuntimeException("Artist not found: " + id);
+        }
+        artistRepository.deleteById(id);
+    }
 }

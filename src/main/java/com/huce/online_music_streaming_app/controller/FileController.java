@@ -12,7 +12,8 @@ import org.springframework.web.multipart.MultipartFile;
 
 import java.io.*;
 import java.nio.file.*;
-import java.util.Map;
+import java.util.*;
+import java.util.stream.Collectors;
 
 @RestController
 @RequiredArgsConstructor
@@ -21,6 +22,8 @@ public class FileController {
     private final FileStorageService fileStorageService;
     private final TrackService trackService;
     private final ArtistRepository artistRepository;
+    private final AlbumRepository albumRepository;
+    private final GenreRepository genreRepository;
 
     @Value("${file.upload-dir}")
     private String uploadDir;
@@ -32,10 +35,16 @@ public class FileController {
             @RequestParam("title") String title,
             @RequestParam("artistId") Long artistId,
             @RequestParam(value = "albumId", required = false) Long albumId,
-            @RequestParam(value = "duration", required = false) Integer duration) {
+            @RequestParam(value = "duration", required = false) Integer duration,
+            @RequestParam(value = "lyrics", required = false) String lyrics,
+            @RequestParam(value = "genreIds", required = false) List<Long> genreIds) {
         try {
             Artist artist = artistRepository.findById(artistId)
                     .orElseThrow(() -> new RuntimeException("Artist not found"));
+
+            Album album = albumId != null
+                    ? albumRepository.findById(albumId).orElse(null)
+                    : null;
 
             String audioUrl = fileStorageService.storeAudio(audioFile);
             String coverUrl = coverFile != null ? fileStorageService.storeImage(coverFile) : null;
@@ -43,10 +52,16 @@ public class FileController {
             Track track = Track.builder()
                     .title(title)
                     .artist(artist)
+                    .album(album)
                     .audioUrl(audioUrl)
                     .coverUrl(coverUrl)
                     .duration(duration)
+                    .lyrics(lyrics)
                     .build();
+
+            if (genreIds != null && !genreIds.isEmpty()) {
+                track.setGenres(new HashSet<>(genreRepository.findAllById(genreIds)));
+            }
 
             return ResponseEntity.ok(trackService.save(track));
         } catch (RuntimeException e) {

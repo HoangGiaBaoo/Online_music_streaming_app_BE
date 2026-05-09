@@ -29,4 +29,11 @@ public class AlbumService {
     public Album save(Album album) {
         return albumRepository.save(album);
     }
+
+    public void deleteById(Long id) {
+        if (!albumRepository.existsById(id)) {
+            throw new RuntimeException("Album not found: " + id);
+        }
+        albumRepository.deleteById(id);
+    }
 }

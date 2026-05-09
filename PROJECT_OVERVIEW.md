@@ -283,9 +283,9 @@ Mỗi interface kế thừa `JpaRepository<Entity, ID>` để có sẵn `findAll
 | Service | Trách nhiệm chính |
 |---------|-------------------|
 | `AuthService` | `register` (kiểm trùng, hash password) và `login` (gọi `AuthenticationManager`, sinh JWT). |
-| `TrackService` | CRUD đơn giản; `search`; `incrementPlayCount` (gọi khi user phát bài). |
-| `ArtistService` | CRUD đơn giản + `search`. |
-| `AlbumService` | CRUD đơn giản + `findByArtist`. |
+| `TrackService` | CRUD đơn giản; `search`; `incrementPlayCount` (gọi khi user phát bài); `deleteById` (xoá track, JPA tự dọn Track_Genres). |
+| `ArtistService` | CRUD đơn giản + `search`; `deleteById` (throw 404 nếu không tồn tại, để DB bắn FK violation nếu còn album/track liên quan). |
+| `AlbumService` | CRUD đơn giản + `findByArtist`; `deleteById` (tương tự ArtistService). |
 | `GenreService` | `findAll`, `findById`. |
 | `PlaylistService` | Tạo playlist, thêm / xoá track (tự sinh `position` = `count + 1`), lấy danh sách track theo `position`. Có `@Transactional` trên `addTrack`/`removeTrack`. |
 | `LibraryService` | `toggleLike` (Liked_Tracks) và `toggleFollow` (Followed_Artists). Thao tác idempotent: nếu đã có thì xoá, chưa có thì tạo. |
@@ -297,7 +297,7 @@ Mỗi interface kế thừa `JpaRepository<Entity, ID>` để có sẵn `findAll
 
 ---
 
-### 5.6 Package `controller` — 13 REST Controller
+### 5.6 Package `controller` — 14 REST Controller
 
 Mọi controller đều trả `ResponseEntity<?>` với body JSON. Lỗi trả `Map.of("error", message)`.
 
@@ -315,12 +315,30 @@ Mọi controller đều trả `ResponseEntity<?>` với body JSON. Lỗi trả `
 | `ChartController` | `/api/charts` | `GET /tracks?limit=`, `GET /artists?limit=` |
 | `RecommendationController` | `/api/recommendations` | `GET /daily?limit=` |
 | `SubscriptionController` | `/api/subscriptions` | `GET /me`, `GET /plans`, `POST /subscribe`, `POST /cancel` |
-| `FileController` | (mixed) | `POST /api/admin/tracks/upload` (upload mp3 + cover, tạo Track), `GET /audio/{filename}` (stream với HTTP Range, trả 206 Partial Content nếu có Range) |
+| `FileController` | (mixed) | `POST /api/admin/tracks/upload` (upload mp3 + cover + lyrics + genreIds, tạo Track — yêu cầu ADMIN), `GET /audio/{filename}` (stream với HTTP Range, trả 206 Partial Content nếu có Range) |
+| `AdminController` | `/api/admin` | *(xem chi tiết bên dưới)* — yêu cầu ADMIN |
 | `UserController` | `/api/users` | `GET /me`, `PUT /me/profile`, `GET /me/profile`, `GET /{id}/profile` (xem hồ sơ) |
 | `UserSettingsController` | `/api/users/me/settings` | `GET /`, `PUT /` (5 field: dataSaver, pushNotifications, streamQualityWifi, privateSession, personalizedAds) |
 | `StatsController` | `/api/stats` | `GET /listening?period=week\|month\|year&offset=0` — top artist, top track, totalPlays, totalMinutes |
 
 > Controller lấy user hiện tại từ `@AuthenticationPrincipal UserDetails` rồi tra DB để có `userId` (do JWT chỉ chứa username). Đa số controller có private helper `getUserId(userDetails)`.
+
+#### AdminController — chi tiết endpoint (tất cả đều yêu cầu role ADMIN)
+
+Nhận `multipart/form-data`. Xoá trả `204 No Content`; lỗi FK constraint trả `409 Conflict` với message tiếng Việt.
+
+| Method | Path | Params | Mô tả |
+|--------|------|--------|-------|
+| `POST` | `/api/admin/artists` | `name`*, `bio`, `avatar` (file) | Tạo nghệ sĩ mới |
+| `PUT` | `/api/admin/artists/{id}` | `name`*, `bio`, `avatar` (file) | Cập nhật nghệ sĩ; avatar chỉ đổi nếu upload file mới |
+| `DELETE` | `/api/admin/artists/{id}` | — | Xoá nghệ sĩ; 409 nếu còn album/bài hát liên quan |
+| `POST` | `/api/admin/albums` | `title`*, `artistId`*, `releaseDate` (ISO), `albumType` (default ALBUM), `description`, `cover` (file) | Tạo album |
+| `PUT` | `/api/admin/albums/{id}` | tương tự POST | Cập nhật album |
+| `DELETE` | `/api/admin/albums/{id}` | — | Xoá album; 409 nếu còn bài hát thuộc album |
+| `PUT` | `/api/admin/tracks/{id}` | `title`*, `artistId`*, `albumId`, `duration`, `lyrics`, `genreIds` (list), `cover` (file) | Cập nhật metadata + lyrics + genres của bài hát |
+| `DELETE` | `/api/admin/tracks/{id}` | — | Xoá bài hát (JPA tự dọn Track_Genres); 409 nếu còn trong playlist/history |
+
+> `*` = bắt buộc. `FileController` vẫn giữ `POST /api/admin/tracks/upload` để tạo track mới kèm upload file MP3.
 
 ---
 
@@ -338,7 +356,7 @@ Mọi controller đều trả `ResponseEntity<?>` với body JSON. Lỗi trả `
 
 | Class | Vai trò |
 |-------|---------|
-| `SecurityConfig` | Cấu hình `SecurityFilterChain`: tắt CSRF, session STATELESS, public các path `/api/auth/**`, `/audio/**`, `/images/**`, role ADMIN cho `/api/admin/**`, các endpoint còn lại yêu cầu authenticated. Khai báo bean `PasswordEncoder` (`BCryptPasswordEncoder`) và `AuthenticationManager`. Gắn `JwtFilter` vào trước `UsernamePasswordAuthenticationFilter`. |
+| `SecurityConfig` | Cấu hình `SecurityFilterChain`: tắt CSRF, session STATELESS, public các path `/api/auth/**`, `/audio/**`, `/images/**`, role ADMIN cho `/api/admin/**`, các endpoint còn lại yêu cầu authenticated. Khai báo bean `PasswordEncoder` (`BCryptPasswordEncoder`) và `AuthenticationManager`. Gắn `JwtFilter` vào trước `UsernamePasswordAuthenticationFilter`. **Thêm CORS** cho phép origin `http://localhost:5173` (React admin dev server) — method GET/POST/PUT/DELETE/OPTIONS, tất cả headers, `allowCredentials = true`. |
 | `FileStorageConfig` | Implement `WebMvcConfigurer.addResourceHandlers`, map `/audio/**` → folder `D:/music-files/audio`, `/images/**` → folder `D:/music-files/images`. Cho phép truy cập file tĩnh trực tiếp qua URL. |
 
 ---
@@ -360,8 +378,16 @@ Mọi controller đều trả `ResponseEntity<?>` với body JSON. Lỗi trả `
 | `GET /api/home/feed` | HomeController | HomeFeedService (+RecommendationService) | nhiều repo |
 | `GET /api/charts/tracks` | ChartController | — | TrackRepository |
 | `GET /api/subscriptions/me` | SubscriptionController | SubscriptionService | SubscriptionRepository |
-| `POST /api/admin/tracks/upload` | FileController | FileStorageService + TrackService | ArtistRepository + TrackRepository |
+| `POST /api/admin/tracks/upload` | FileController | FileStorageService + TrackService | ArtistRepository + AlbumRepository + GenreRepository + TrackRepository |
 | `GET /audio/{filename}` | FileController | — (đọc file trực tiếp) | — |
+| `POST /api/admin/artists` | AdminController | ArtistService + FileStorageService | ArtistRepository |
+| `PUT /api/admin/artists/{id}` | AdminController | ArtistService + FileStorageService | ArtistRepository |
+| `DELETE /api/admin/artists/{id}` | AdminController | ArtistService | ArtistRepository |
+| `POST /api/admin/albums` | AdminController | AlbumService + ArtistService + FileStorageService | AlbumRepository + ArtistRepository |
+| `PUT /api/admin/albums/{id}` | AdminController | AlbumService + ArtistService + FileStorageService | AlbumRepository + ArtistRepository |
+| `DELETE /api/admin/albums/{id}` | AdminController | AlbumService | AlbumRepository |
+| `PUT /api/admin/tracks/{id}` | AdminController | TrackService + ArtistService + AlbumService + FileStorageService | TrackRepository + GenreRepository |
+| `DELETE /api/admin/tracks/{id}` | AdminController | TrackService | TrackRepository |
 
 ---
 
@@ -370,18 +396,22 @@ Mọi controller đều trả `ResponseEntity<?>` với body JSON. Lỗi trả `
 1. **JWT chỉ chứa `username`** (subject). Mọi controller phải tra `UserRepository.findByUsername` để lấy `userId` — đây là pattern xuyên suốt project.
 2. **Curated playlist** là playlist do admin tạo (`isCurated = true`). Home feed nhóm chúng theo `mood`. Logic này nằm hoàn toàn trong `HomeFeedService`.
 3. **`HomeSectionDto` không lưu DB** — nó được sinh runtime mỗi lần gọi `/api/home/feed`.
-4. **Track-Genre M:N** được khai báo bằng `@ManyToMany` + `@JoinTable` (Hibernate tự sinh bảng `Track_Genres`), khác với 3 bảng trung gian khác (`Playlist_Tracks`, `Liked_Tracks`, `Followed_Artists`) là entity riêng vì có thêm cột phụ (`position`, `liked_at`, `followed_at`).
+4. **Track-Genre M:N** được khai báo bằng `@ManyToMany` + `@JoinTable` (Hibernate tự sinh bảng `Track_Genres`), khác với 3 bảng trung gian khác (`Playlist_Tracks`, `Liked_Tracks`, `Followed_Artists`) là entity riêng vì có thêm cột phụ (`position`, `liked_at`, `followed_at`). Khi xoá Track, Hibernate tự xoá hàng trong `Track_Genres` (owning side) nhưng **không** tự xoá `Playlist_Tracks`, `Liked_Tracks`, `Play_History` — nếu còn record ở các bảng đó, DB bắn FK violation → AdminController trả `409 Conflict`.
 5. **Stream audio**: `FileController.streamAudio` đọc cả file vào RAM (`Files.readAllBytes`) rồi `arraycopy` chunk — đơn giản nhưng tốn bộ nhớ với file lớn. Đây là điểm có thể tối ưu sau.
 6. **Lỗi xử lý đơn giản**: hầu hết service throw `RuntimeException` với message tiếng Anh, controller catch rồi trả 4xx. Chưa có `@ControllerAdvice`/exception handler tập trung.
 7. **Không cá nhân hoá daily mix**: `RecommendationService.dailyMix` hiện chỉ trả top theo `play_count` toàn hệ thống, không dùng `userId`.
 8. **`ddl-auto: update`** — Hibernate tự ALTER TABLE khi entity đổi. Dùng cho dev, không nên dùng production.
+9. **CORS chỉ mở cho `http://localhost:5173`** (React admin dev server). Nếu deploy React lên port/domain khác phải cập nhật `SecurityConfig.corsConfigurationSource()`.
+10. **Bug đã fix trong `FileController`**: trước đây `albumId` được nhận nhưng không gán vào Track (track luôn `album = null`). Đã sửa — hiện `albumId` được tra `AlbumRepository` và gán đúng vào entity.
 
 ---
 
 ## 8. Trạng thái dự án
 
 - Backend phase 1 đã hoàn thành: đủ Entity → Repository → Service → Controller cho 12 bảng + JWT + file streaming + home feed + chart + subscription + recommendation cơ bản.
-- Chưa có: Android client, test tự động, CI/CD, payment gateway, lyrics editor, daily mix cá nhân hoá, audio quality variants, collaborative playlist.
+- **Admin API** đã hoàn thiện: `AdminController` cung cấp đầy đủ CRUD Artist/Album và update/delete Track cho trang admin web. `FileController` đã được vá bug albumId và bổ sung lyrics + genreIds.
+- **CORS** đã cấu hình cho phép React admin (port 5173) gọi tất cả endpoint.
+- Chưa có: React admin frontend, Android client, test tự động, CI/CD, payment gateway, daily mix cá nhân hoá, audio quality variants, collaborative playlist.
 
 ---
 
