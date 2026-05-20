@@ -62,9 +62,10 @@ public class PlaylistController {
 
     @PostMapping("/{id}/tracks")
     public ResponseEntity<?> addTrack(@PathVariable Long id,
-                                      @RequestParam Long trackId) {
+                                      @RequestParam Long trackId,
+                                      @AuthenticationPrincipal UserDetails userDetails) {
         try {
-            playlistService.addTrack(id, trackId);
+            playlistService.addTrack(id, trackId, getUserId(userDetails));
             return ResponseEntity.ok(Map.of("message", "Track added"));
         } catch (RuntimeException e) {
             return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
@@ -73,9 +74,14 @@ public class PlaylistController {
 
     @DeleteMapping("/{id}/tracks/{trackId}")
     public ResponseEntity<?> removeTrack(@PathVariable Long id,
-                                         @PathVariable Long trackId) {
-        playlistService.removeTrack(id, trackId);
-        return ResponseEntity.ok(Map.of("message", "Track removed"));
+                                         @PathVariable Long trackId,
+                                         @AuthenticationPrincipal UserDetails userDetails) {
+        try {
+            playlistService.removeTrack(id, trackId, getUserId(userDetails));
+            return ResponseEntity.ok(Map.of("message", "Track removed"));
+        } catch (RuntimeException e) {
+            return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
+        }
     }
 
     private Long getUserId(UserDetails userDetails) {

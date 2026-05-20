@@ -6,7 +6,12 @@ import org.springframework.data.jpa.repository.JpaRepository;
 import java.util.List;
 
 public interface PlaylistRepository extends JpaRepository<Playlist, Long> {
-    List<Playlist> findByUser_UserId(Long userId);
+    List<Playlist> findByUser_UserIdAndIsCuratedFalse(Long userId);
     List<Playlist> findByIsCuratedTrue();
     List<Playlist> findByIsCuratedTrueAndMood(Mood mood);
+
+    // used by UserService for profile view — same filter, curated playlists excluded
+    default List<Playlist> findByUser_UserId(Long userId) {
+        return findByUser_UserIdAndIsCuratedFalse(userId);
+    }
 }

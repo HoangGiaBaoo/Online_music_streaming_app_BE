@@ -18,7 +18,7 @@ public class PlaylistService {
     private final UserRepository userRepository;
 
     public List<Playlist> findByUser(Long userId) {
-        return playlistRepository.findByUser_UserId(userId);
+        return playlistRepository.findByUser_UserIdAndIsCuratedFalse(userId);
     }
 
     public Playlist findById(Long id) {
@@ -38,8 +38,12 @@ public class PlaylistService {
     }
 
     @Transactional
-    public void addTrack(Long playlistId, Long trackId) {
+    public void addTrack(Long playlistId, Long trackId, Long currentUserId) {
         Playlist playlist = findById(playlistId);
+        assertOwner(playlist, currentUserId);
+        if (Boolean.TRUE.equals(playlist.getIsCurated())) {
+            throw new RuntimeException("Cannot modify a curated playlist");
+        }
         Track track = trackRepository.findById(trackId)
                 .orElseThrow(() -> new RuntimeException("Track not found: " + trackId));
 
@@ -54,11 +58,27 @@ public class PlaylistService {
     }
 
     @Transactional
-    public void removeTrack(Long playlistId, Long trackId) {
+    public void removeTrack(Long playlistId, Long trackId, Long currentUserId) {
+        Playlist playlist = findById(playlistId);
+        assertOwner(playlist, currentUserId);
+        if (Boolean.TRUE.equals(playlist.getIsCurated())) {
+            throw new RuntimeException("Cannot modify a curated playlist");
+        }
         playlistTrackRepository.deleteByIdPlaylistIdAndIdTrackId(playlistId, trackId);
     }
 
-    public List<PlaylistTrack> getTracks(Long playlistId) {
-        return playlistTrackRepository.findByIdPlaylistIdOrderByPosition(playlistId);
+    @Transactional(readOnly = true)
+    public List<Track> getTracks(Long playlistId) {
+        return playlistTrackRepository.findByIdPlaylistIdOrderByPosition(playlistId)
+                .stream()
+                .map(PlaylistTrack::getTrack)
+                .toList();
+    }
+
+    private void assertOwner(Playlist playlist, Long currentUserId) {
+        Long ownerId = playlist.getUser() != null ? playlist.getUser().getUserId() : null;
+        if (ownerId == null || !ownerId.equals(currentUserId)) {
+            throw new RuntimeException("You don't own this playlist");
+        }
     }
 }

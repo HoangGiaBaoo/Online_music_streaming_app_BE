@@ -415,4 +415,277 @@ Nhận `multipart/form-data`. Xoá trả `204 No Content`; lỗi FK constraint t
 
 ---
 
+## 9. Hướng dẫn tích hợp Android
+
+> Đây là tài liệu **dành cho Android developer**. Mô tả chính xác những gì client phải gọi, theo thứ tự nào, và response trả về dạng gì.
+
+### 9.1 Base URL & Header chung
+
+```
+Base URL (emulator):  http://10.0.2.2:8080/musicapp/
+Base URL (thiết bị thật trên cùng mạng LAN): http://<IP_PC>:8080/musicapp/
+
+Header bắt buộc cho mọi endpoint (trừ /api/auth/**):
+  Authorization: Bearer <jwt_token>
+  Content-Type: application/json   (với request có body)
+```
+
+Token lấy từ `POST /api/auth/login`, lưu vào SharedPreferences / DataStore, tự động gắn vào mọi request qua Retrofit Interceptor.
+
+---
+
+### 9.2 Luồng xác thực
+
+```
+1. POST /api/auth/register
+   Body: { "username": "...", "email": "...", "password": "..." }
+   Response 200: { "message": "Registration successful" }
+
+2. POST /api/auth/login
+   Body: { "username": "...", "password": "..." }
+   Response 200: { "token": "eyJ...", "username": "...", "role": "user" }
+   → Lưu token, username, role vào local storage
+
+3. POST /api/auth/refresh
+   Body: { "refreshToken": "<token>" }
+   Response 200: JwtResponse mới
+   → Gọi khi nhận 401 (token hết hạn)
+```
+
+---
+
+### 9.3 Phát nhạc & ghi lượt nghe (QUAN TRỌNG)
+
+Đây là bước **bắt buộc** để `playCount` được cập nhật đúng — ảnh hưởng trực tiếp đến Top 10 bài hát của nghệ sĩ, bảng xếp hạng chart, và đề xuất.
+
+```
+Bước 1 — Lấy URL audio:
+  Track entity có trường audioUrl, ví dụ: "/audio/uuid_song.mp3"
+  URL đầy đủ để ExoPlayer phát: http://10.0.2.2:8080/musicapp/audio/uuid_song.mp3
+  Endpoint /audio/** là PUBLIC — không cần token.
+  ExoPlayer tự gửi Range header → server trả 206 Partial Content.
+
+Bước 2 — Ghi lại lượt nghe (gọi SAU KHI bài đã thực sự phát, ví dụ sau 30 giây):
+  POST /api/history?trackId={trackId}
+  Header: Authorization: Bearer <token>
+  Body: (không có)
+  Response 200: { "message": "Recorded" }
+
+  Tác dụng kép của API này:
+    • Lưu hàng vào bảng Play_History (dùng cho Recently Played, Stats)
+    • Tăng track.playCount lên 1 (dùng cho Top 10 nghệ sĩ, Chart, Recommendation)
+```
+
+**Lưu ý:** Không gọi endpoint này khi user tua qua mà không thực sự nghe, hoặc khi preview ngắn. Nên gọi sau khi bài đã phát được ít nhất 30 giây.
+
+---
+
+### 9.4 Trang nghệ sĩ — Top 10 bài hát
+
+Đây là tính năng tương ứng ảnh `giao_dien_trang_nghe_si.jpg` và `top10_bai_hat.jpg`.
+
+```
+1. Thông tin nghệ sĩ:
+   GET /api/artists/{artistId}
+   Response: Artist { artistId, name, bio, avatarUrl, createdAt }
+
+2. Top 10 bài hát (xếp hạng theo playCount tích lũy):
+   GET /api/artists/{artistId}/tracks/popular?limit=10
+   Response: List<Track>
+
+3. Danh sách album / đĩa đơn:
+   GET /api/artists/{artistId}/albums
+   Response: List<Album> — mỗi album có trường albumType: "ALBUM" | "SINGLE" | "EP" | "COMPILATION"
+
+4. Nghệ sĩ liên quan (phần "Nghe thêm"):
+   GET /api/artists/{artistId}/related?limit=10
+   Response: List<Artist>
+
+5. Toggle follow nghệ sĩ:
+   POST /api/artists/{artistId}/follow
+   Response: { "message": "OK" }
+   (Gọi lại lần 2 sẽ unfollow — idempotent toggle)
+
+6. Kiểm tra user đang follow không:
+   GET /api/artists/followed
+   Response: List<Artist> — client tự kiểm tra artistId có trong list không
+```
+
+**Cấu trúc Track trả về từ popular endpoint:**
+```json
+{
+  "trackId": 1,
+  "title": "Tên bài hát",
+  "duration": 210,
+  "audioUrl": "/audio/uuid_song.mp3",
+  "coverUrl": "/images/uuid_cover.jpg",
+  "playCount": 1500,
+  "lyrics": "Lời bài hát...",
+  "createdAt": "2024-01-15T10:00:00",
+  "artist": { "artistId": 5, "name": "...", "avatarUrl": "/images/..." },
+  "album":  { "albumId": 3, "title": "...", "coverUrl": "/images/..." }
+}
+```
+
+`audioUrl` và `coverUrl` là path tương đối → prepend base URL để hiển thị / phát.
+
+---
+
+### 9.5 Màn hình Home Feed
+
+```
+GET /api/home/feed?filter=all
+  filter options: all | music | following
+  Response: List<HomeSectionDto>
+
+HomeSectionDto {
+  kind:     "FEATURED" | "TOP_PICKS" | "RECENTLY_PLAYED" | "RECOMMENDED"
+          | "CHART" | "MOOD_PLAYLIST" | "NEW_RELEASES" | "POPULAR_ARTISTS"
+  title:    String  (tiêu đề hiển thị)
+  subtitle: String  (có thể null)
+  items:    List<?>  (Playlist, Track, hoặc Artist tùy kind)
+}
+
+Mapping kind → loại item trong items[]:
+  FEATURED         → Playlist (curated)
+  TOP_PICKS        → List<Playlist> (curated)
+  RECENTLY_PLAYED  → List<RecentItemDto { track, playedAt }>
+  RECOMMENDED      → List<Track>
+  CHART            → List<Track>
+  MOOD_PLAYLIST    → List<Playlist> (curated, cùng mood)
+  NEW_RELEASES     → List<Album>
+  POPULAR_ARTISTS  → List<Artist>
+```
+
+---
+
+### 9.6 Tìm kiếm
+
+```
+GET /api/search?q={từ_khóa}
+Response: {
+  "tracks": List<Track>,
+  "artists": List<Artist>
+}
+```
+
+---
+
+### 9.7 Thư viện cá nhân
+
+```
+Bài hát đã thích:
+  GET  /api/tracks/liked            → List<LikedTrack { track, likedAt }>
+  POST /api/tracks/{id}/like        → toggle (like / unlike)
+
+Nghệ sĩ đang follow:
+  GET  /api/artists/followed        → List<Artist>
+  POST /api/artists/{id}/follow     → toggle follow / unfollow
+
+Playlist của user:
+  GET  /api/playlists               → List<Playlist> (của user hiện tại)
+  POST /api/playlists               Body: { "name": "...", "isPublic": false }
+  GET  /api/playlists/{id}/tracks   → List<PlaylistTrack> có trường position
+  POST /api/playlists/{id}/tracks?trackId={id}   → thêm track
+  DELETE /api/playlists/{id}/tracks/{trackId}    → xoá track
+
+Lịch sử nghe gần đây:
+  GET /api/history/recent?limit=10
+  Response: List<RecentItemDto { track: Track, playedAt: LocalDateTime }>
+```
+
+---
+
+### 9.8 Bảng xếp hạng (Chart)
+
+```
+Top tracks toàn hệ thống (theo playCount):
+  GET /api/charts/tracks?limit=20
+  Response: List<Track>
+
+Top artists (theo follower count):
+  GET /api/charts/artists?limit=10
+  Response: List<Artist>
+```
+
+---
+
+### 9.9 Subscription / Premium
+
+```
+Gói hiện tại:
+  GET /api/subscriptions/me
+  Response: { plan: "FREE"|"INDIVIDUAL"|"STUDENT"|"FAMILY", active: bool, endDate: ... }
+  (Trả FREE nếu user chưa subscribe)
+
+Danh sách gói:
+  GET /api/subscriptions/plans
+  Response: List<PlanInfoDto { plan, name, priceVnd, features: List<String> }>
+
+Đăng ký gói:
+  POST /api/subscriptions/subscribe
+  Body: { "plan": "INDIVIDUAL" }
+
+Huỷ gói:
+  POST /api/subscriptions/cancel
+```
+
+---
+
+### 9.10 Hồ sơ người dùng & cài đặt
+
+```
+Thông tin user hiện tại:
+  GET /api/users/me
+  Response: UserMeDto { userId, username, email, role, avatarUrl, displayName, bio }
+
+Cập nhật profile:
+  PUT /api/users/me/profile
+  Body: { "displayName": "...", "bio": "..." }
+
+Cài đặt:
+  GET /api/users/me/settings
+  PUT /api/users/me/settings
+  Body: {
+    "dataSaver": false,
+    "pushNotifications": true,
+    "streamQualityWifi": "HIGH",   // LOW | NORMAL | HIGH | VERY_HIGH | AUTO
+    "privateSession": false,
+    "personalizedAds": true
+  }
+```
+
+---
+
+### 9.11 Checklist Android cần implement
+
+| # | Tính năng | Endpoint liên quan | Ghi chú |
+|---|-----------|-------------------|---------|
+| 1 | Đăng ký / đăng nhập | `POST /api/auth/register`, `POST /api/auth/login` | Lưu JWT token |
+| 2 | **Ghi lượt nghe sau khi phát** | `POST /api/history?trackId=X` | **Bắt buộc** để playCount đúng |
+| 3 | Trang nghệ sĩ — info | `GET /api/artists/{id}` | |
+| 4 | Trang nghệ sĩ — **Top 10 bài** | `GET /api/artists/{id}/tracks/popular?limit=10` | Xếp theo playCount |
+| 5 | Trang nghệ sĩ — album | `GET /api/artists/{id}/albums` | Dùng `albumType` để hiện label |
+| 6 | Trang nghệ sĩ — nghệ sĩ liên quan | `GET /api/artists/{id}/related` | |
+| 7 | Follow / unfollow nghệ sĩ | `POST /api/artists/{id}/follow` | Toggle |
+| 8 | Home feed | `GET /api/home/feed?filter=all` | Parse theo `kind` |
+| 9 | Tìm kiếm | `GET /api/search?q=` | |
+| 10 | Like / unlike bài hát | `POST /api/tracks/{id}/like` | Toggle |
+| 11 | Playlist cá nhân | CRUD `/api/playlists` | |
+| 12 | Lịch sử nghe gần đây | `GET /api/history/recent?limit=10` | |
+| 13 | Bảng xếp hạng | `GET /api/charts/tracks` | |
+| 14 | Premium / Subscription | `/api/subscriptions/*` | |
+| 15 | Cài đặt | `GET/PUT /api/users/me/settings` | |
+
+### 9.12 Lưu ý khi build Android
+
+- **URL ảnh / audio:** `coverUrl`, `avatarUrl`, `audioUrl` đều là path tương đối (ví dụ `/images/abc.jpg`). Phải prepend base URL: `http://10.0.2.2:8080/musicapp` + path.
+- **ExoPlayer URI:** `http://10.0.2.2:8080/musicapp` + `track.audioUrl`. Endpoint `/audio/**` là public, không cần token.
+- **albumType enum:** Giá trị string `"ALBUM"` / `"SINGLE"` / `"EP"` / `"COMPILATION"` → hiển thị label tiếng Việt tương ứng.
+- **Lazy load ảnh:** Dùng Glide / Coil, tất cả ảnh đều là HTTP (không HTTPS ở môi trường dev).
+- **401 Unauthorized:** Token hết hạn sau 24h → gọi `POST /api/auth/refresh` hoặc redirect về màn login.
+- **playCount cần dữ liệu thật:** Top 10 bài hát của nghệ sĩ xếp theo `playCount`. Trong môi trường dev/test, nếu chưa có ai nghe thì tất cả đều = 0 → thứ tự sẽ tuỳ ý. Cần gọi `POST /api/history?trackId=X` khi test để có dữ liệu thật.
+
+---
+
 > File này được sinh tự động dựa trên source code thực tế tại thời điểm đọc. Khi entity hay endpoint thay đổi, hãy cập nhật lại các bảng tương ứng.
