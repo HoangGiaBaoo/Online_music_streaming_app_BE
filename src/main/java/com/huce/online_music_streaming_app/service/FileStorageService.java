@@ -22,6 +22,22 @@ public class FileStorageService {
         return store(file, "images");
     }
 
+    public String storePlaylistCover(MultipartFile file, Long playlistId) {
+        try {
+            Path dir = Paths.get(uploadDir, "images");
+            Files.createDirectories(dir);
+
+            String ext = extractImageExtension(file.getOriginalFilename(), file.getContentType());
+            String filename = "playlist_" + playlistId + "_" + System.currentTimeMillis() + ext;
+            Path target = dir.resolve(filename);
+            Files.copy(file.getInputStream(), target, StandardCopyOption.REPLACE_EXISTING);
+
+            return "/images/" + filename;
+        } catch (IOException e) {
+            throw new RuntimeException("Failed to store file: " + e.getMessage());
+        }
+    }
+
     private String store(MultipartFile file, String subfolder) {
         try {
             Path dir = Paths.get(uploadDir, subfolder);
@@ -35,5 +51,18 @@ public class FileStorageService {
         } catch (IOException e) {
             throw new RuntimeException("Failed to store file: " + e.getMessage());
         }
+    }
+
+    private String extractImageExtension(String originalFilename, String contentType) {
+        if (originalFilename != null) {
+            int dot = originalFilename.lastIndexOf('.');
+            if (dot >= 0 && dot < originalFilename.length() - 1) {
+                String ext = originalFilename.substring(dot).toLowerCase();
+                if (ext.equals(".jpg") || ext.equals(".jpeg") || ext.equals(".png")) {
+                    return ext;
+                }
+            }
+        }
+        return "image/png".equalsIgnoreCase(contentType) ? ".png" : ".jpg";
     }
 }

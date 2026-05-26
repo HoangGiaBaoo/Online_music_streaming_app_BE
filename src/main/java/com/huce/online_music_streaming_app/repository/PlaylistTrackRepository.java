@@ -8,5 +8,6 @@ import java.util.List;
 public interface PlaylistTrackRepository extends JpaRepository<PlaylistTrack, PlaylistTrackId> {
     List<PlaylistTrack> findByIdPlaylistIdOrderByPosition(Long playlistId);
     void deleteByIdPlaylistIdAndIdTrackId(Long playlistId, Long trackId);
+    void deleteByIdPlaylistId(Long playlistId);
     int countByIdPlaylistId(Long playlistId);
 }
