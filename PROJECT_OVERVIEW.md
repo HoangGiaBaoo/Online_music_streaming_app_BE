@@ -26,6 +26,7 @@ Tài liệu này tóm tắt toàn bộ dự án **online_music_streaming_app**: 
   - **MySQL 8** (`localhost:3306/music_app`)
   - **Spring Data JPA + Hibernate** (dialect MySQL)
   - **Spring Security + JWT** (`jjwt 0.12.6`)
+  - **Bean Validation** (`spring-boot-starter-validation`, Jakarta) — validate request body / params
   - **Lombok** giảm boilerplate
   - File audio / ảnh lưu trên đĩa tại `D:/music-files`
 
@@ -206,7 +207,7 @@ User ──< Playlist ──< PlaylistTrack >── Track >── Album >── 
 | `User` | `Users` | Tài khoản người dùng. Trường: `userId`, `username` (unique), `email` (unique), `passwordHash` (`@JsonIgnore`), `role` (default `"user"`), `avatarUrl`, `displayName`, `bio`, `createdAt`. |
 | `UserSettings` | `User_Settings` | Cài đặt cá nhân (1-1 với User). 5 field cho màn Cài đặt: `dataSaver`, `pushNotifications`, `streamQualityWifi` (enum), `privateSession`, `personalizedAds`. Auto-create default khi register. |
 | `Artist` | `Artists` | Nghệ sĩ. Trường: `artistId`, `name`, `bio` (TEXT), `avatarUrl`, `createdAt`. |
-| `Genre` | `Genres` | Thể loại nhạc. Trường: `genreId`, `name` (unique), `coverColor` (mã hex để UI render tile), `coverUrl`. |
+| `Genre` | `Genres` | Thể loại nhạc. Trường: `genreId`, `name` (unique, length 100), `coverColor` (mã hex 6 ký tự `#XXXXXX` để UI render tile), `coverUrl`. |
 | `Album` | `Albums` | Album thuộc 1 Artist. `@ManyToOne` về `Artist`. Trường thêm: `title`, `coverUrl`, `releaseDate`, `albumType` (enum `AlbumType`, lưu STRING), `description`. |
 | `Track` | `Tracks` | Bài hát. `@ManyToOne` về `Artist` (bắt buộc) và `Album` (optional). `@ManyToMany` với `Genre` qua bảng `Track_Genres`. Trường: `title`, `duration`, `audioUrl`, `coverUrl`, `playCount` (default 0), `lyrics` (TEXT), `createdAt`. Loại trừ `genres` khỏi `toString` và `equals` để tránh lazy-load loop. |
 | `Playlist` | `Playlists` | Danh sách phát. `@ManyToOne` về `User` (chủ playlist). `isPublic`, `isCurated` (true = playlist do admin biên tập), `description`, `coverUrl`, `coverColor`, `mood` (enum `Mood`, lưu STRING). |
@@ -273,6 +274,8 @@ Mỗi interface kế thừa `JpaRepository<Entity, ID>` để có sẵn `findAll
 | `SubscribeRequest` | request | `plan` (`SubscriptionPlan`) |
 | `PlanInfoDto` | response | `plan`, `name`, `priceVnd`, `features` (List<String>) — mô tả gói Premium. |
 | `HomeSectionDto` | response | `kind` (FEATURED, TOP_PICKS, …), `title`, `subtitle`, `items` (List<?>) — 1 section trong home feed. |
+| `GenreRequest` | request | `name` (`@NotBlank`, `@Size(max=100)`), `coverColor` (`@Pattern ^#[0-9A-Fa-f]{6}$`), `coverUrl` — dùng cho admin tạo/sửa genre. |
+| `GenreResponse` | response | `genreId`, `name`, `coverColor`, `coverUrl`. Static factory `from(Genre)`. |
 
 > Các entity được trả thẳng trong nhiều endpoint (ví dụ list track) — không có DTO mapping riêng cho entity vì project học tập, ưu tiên đơn giản.
 
@@ -286,7 +289,7 @@ Mỗi interface kế thừa `JpaRepository<Entity, ID>` để có sẵn `findAll
 | `TrackService` | CRUD đơn giản; `search`; `incrementPlayCount` (gọi khi user phát bài); `deleteById` (xoá track, JPA tự dọn Track_Genres). |
 | `ArtistService` | CRUD đơn giản + `search`; `deleteById` (throw 404 nếu không tồn tại, để DB bắn FK violation nếu còn album/track liên quan). |
 | `AlbumService` | CRUD đơn giản + `findByArtist`; `deleteById` (tương tự ArtistService). |
-| `GenreService` | `findAll`, `findById`. |
+| `GenreService` | `findAll`, `findById`; `create`/`update` từ `GenreRequest`; `updateCoverUrl` cho upload ảnh; `delete` thực hiện **cascade-null** — gỡ genre khỏi `track.genres` (Track là owning side của `Track_Genres`) trước khi xoá để tránh FK violation. |
 | `PlaylistService` | Tạo playlist, thêm / xoá track (tự sinh `position` = `count + 1`), lấy danh sách track theo `position`. Có `@Transactional` trên `addTrack`/`removeTrack`. |
 | `LibraryService` | `toggleLike` (Liked_Tracks) và `toggleFollow` (Followed_Artists). Thao tác idempotent: nếu đã có thì xoá, chưa có thì tạo. |
 | `PlayHistoryService` | `record` lưu lượt nghe, `getHistory` trả lịch sử của user. |
@@ -317,6 +320,7 @@ Mọi controller đều trả `ResponseEntity<?>` với body JSON. Lỗi trả `
 | `SubscriptionController` | `/api/subscriptions` | `GET /me`, `GET /plans`, `POST /subscribe`, `POST /cancel` |
 | `FileController` | (mixed) | `POST /api/admin/tracks/upload` (upload mp3 + cover + lyrics + genreIds, tạo Track — yêu cầu ADMIN), `GET /audio/{filename}` (stream với HTTP Range, trả 206 Partial Content nếu có Range) |
 | `AdminController` | `/api/admin` | *(xem chi tiết bên dưới)* — yêu cầu ADMIN |
+| `GenreAdminController` | `/api/admin/genres` | CRUD Genre + upload cover (`POST /{id}/cover` multipart) — yêu cầu ADMIN. Body JSON dùng `GenreRequest`, response `GenreResponse`. *(xem chi tiết bên dưới)* |
 | `UserController` | `/api/users` | `GET /me`, `PUT /me/profile`, `GET /me/profile`, `GET /{id}/profile` (xem hồ sơ) |
 | `UserSettingsController` | `/api/users/me/settings` | `GET /`, `PUT /` (5 field: dataSaver, pushNotifications, streamQualityWifi, privateSession, personalizedAds) |
 | `StatsController` | `/api/stats` | `GET /listening?period=week\|month\|year&offset=0` — top artist, top track, totalPlays, totalMinutes |
@@ -339,6 +343,19 @@ Nhận `multipart/form-data`. Xoá trả `204 No Content`; lỗi FK constraint t
 | `DELETE` | `/api/admin/tracks/{id}` | — | Xoá bài hát (JPA tự dọn Track_Genres); 409 nếu còn trong playlist/history |
 
 > `*` = bắt buộc. `FileController` vẫn giữ `POST /api/admin/tracks/upload` để tạo track mới kèm upload file MP3.
+
+#### GenreAdminController — chi tiết endpoint (tất cả đều yêu cầu role ADMIN)
+
+Body JSON là `GenreRequest` ({ `name`, `coverColor`, `coverUrl` }). Response là `GenreResponse`. Validation lỗi → 400; trùng `name` → 409 Conflict; không tìm thấy → 404.
+
+| Method | Path | Body / Params | Mô tả |
+|--------|------|---------------|-------|
+| `GET` | `/api/admin/genres` | — | List tất cả genre (`List<GenreResponse>`) |
+| `GET` | `/api/admin/genres/{id}` | — | Chi tiết 1 genre |
+| `POST` | `/api/admin/genres` | `GenreRequest` | Tạo genre mới → 201 |
+| `PUT` | `/api/admin/genres/{id}` | `GenreRequest` | Cập nhật genre |
+| `DELETE` | `/api/admin/genres/{id}` | — | Xoá genre với **cascade-null**: gỡ khỏi mọi track tham chiếu rồi xoá → 204. Không bao giờ trả 409 do FK. |
+| `POST` | `/api/admin/genres/{id}/cover` | multipart: `file` (image) | Lưu ảnh qua `FileStorageService.storeImage`, cập nhật `coverUrl`. Trả `{ "coverUrl": "/images/..." }`. |
 
 ---
 
@@ -388,6 +405,11 @@ Nhận `multipart/form-data`. Xoá trả `204 No Content`; lỗi FK constraint t
 | `DELETE /api/admin/albums/{id}` | AdminController | AlbumService | AlbumRepository |
 | `PUT /api/admin/tracks/{id}` | AdminController | TrackService + ArtistService + AlbumService + FileStorageService | TrackRepository + GenreRepository |
 | `DELETE /api/admin/tracks/{id}` | AdminController | TrackService | TrackRepository |
+| `GET /api/admin/genres` | GenreAdminController | GenreService | GenreRepository |
+| `POST /api/admin/genres` | GenreAdminController | GenreService | GenreRepository |
+| `PUT /api/admin/genres/{id}` | GenreAdminController | GenreService | GenreRepository |
+| `DELETE /api/admin/genres/{id}` | GenreAdminController | GenreService | GenreRepository + TrackRepository |
+| `POST /api/admin/genres/{id}/cover` | GenreAdminController | GenreService + FileStorageService | GenreRepository |
 
 ---
 
@@ -409,7 +431,7 @@ Nhận `multipart/form-data`. Xoá trả `204 No Content`; lỗi FK constraint t
 ## 8. Trạng thái dự án
 
 - Backend phase 1 đã hoàn thành: đủ Entity → Repository → Service → Controller cho 12 bảng + JWT + file streaming + home feed + chart + subscription + recommendation cơ bản.
-- **Admin API** đã hoàn thiện: `AdminController` cung cấp đầy đủ CRUD Artist/Album và update/delete Track cho trang admin web. `FileController` đã được vá bug albumId và bổ sung lyrics + genreIds.
+- **Admin API** đã hoàn thiện: `AdminController` cung cấp đầy đủ CRUD Artist/Album và update/delete Track cho trang admin web. `FileController` đã được vá bug albumId và bổ sung lyrics + genreIds. Có thêm `GenreAdminController` (`/api/admin/genres`) — CRUD Genre + upload cover, dùng Bean Validation cho `GenreRequest` (regex hex cho `coverColor`) và **cascade-null** khi xoá để không bị FK chặn.
 - **CORS** đã cấu hình cho phép React admin (port 5173) gọi tất cả endpoint.
 - Chưa có: React admin frontend, Android client, test tự động, CI/CD, payment gateway, daily mix cá nhân hoá, audio quality variants, collaborative playlist.
 

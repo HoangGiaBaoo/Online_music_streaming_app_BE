@@ -16,7 +16,7 @@ public class Genre {
     @Column(name = "genre_id")
     private Long genreId;
 
-    @Column(name = "name", nullable = false, unique = true, length = 50)
+    @Column(name = "name", nullable = false, unique = true, length = 100)
     private String name;
 
     @Column(name = "cover_color", length = 10)
